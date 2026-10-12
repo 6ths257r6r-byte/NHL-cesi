@@ -47,10 +47,17 @@ def radek_hrace(p, tym):
         return None
     g, a = p.get("goals", 0), p.get("assists", 0)
     pm = p.get("plusMinus", 0)
+    body = "🚨" * g
+    if g and a:
+        body += " "
+    body += "🍎" * a
+    if not body:
+        body = "bez bodu"
     return (
-        f"{jmeno(p)} ({tym}): {g} G, {a} A, {pm:+d}, "
+        f"{jmeno(p)} ({tym}): {body}, {pm:+d}, "
         f"{toi} na ledě, {p.get('sog', 0)} střel na bránu"
     )
+
 
 
 def radek_brankare(p, tym):
