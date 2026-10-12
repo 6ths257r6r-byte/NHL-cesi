@@ -9,6 +9,7 @@ from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 
 API = "https://api-web.nhle.com/v1"
+STAV = "odeslano.txt"
 
 
 def get(path):
@@ -72,7 +73,11 @@ def radek_brankare(p, tym):
 
 def sestav_prehled(datum):
     hry = [g for g in get(f"/score/{datum}").get("games", [])
-           if g.get("gameState") in ("OFF", "FINAL")]
+           if g.get("gameScheduleState", "OK") == "OK"]
+    if not hry:
+        return "nic", []
+    if not all(g.get("gameState") in ("OFF", "FINAL") for g in hry):
+        return "hraje", []
     bloky = []
     for g in hry:
         box = get(f"/gamecenter/{g['id']}/boxscore")
@@ -94,7 +99,20 @@ def sestav_prehled(datum):
         if radky:
             hlavicka = f"{away['abbrev']} {away.get('score', '?')}:{home.get('score', '?')} {home['abbrev']}"
             bloky.append(hlavicka + "\n" + "\n".join(radky))
-    return bloky
+    return "hotovo", bloky
+
+
+def uz_zpracovano(datum):
+    try:
+        with open(STAV) as f:
+            return f.read().strip() == datum
+    except FileNotFoundError:
+        return False
+
+
+def zapis_stav(datum):
+    with open(STAV, "w") as f:
+        f.write(datum + "\n")
 
 
 def posli_email(predmet, text):
@@ -114,26 +132,41 @@ def posli_email(predmet, text):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     jen_vypsat = "--print" in sys.argv
-    if args:
+    rucne = bool(args)
+    ukladat = not rucne and not jen_vypsat
+
+    if rucne:
         datum = args[0]
     else:
-        datum = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=1)).strftime("%Y-%m-%d")
+        ted = datetime.now(ZoneInfo("America/New_York"))
+        datum = (ted - timedelta(hours=6)).strftime("%Y-%m-%d")
+        if uz_zpracovano(datum):
+            print(f"{datum}: uz zpracovano, nic se nedela.")
+            return
 
-    bloky = sestav_prehled(datum)
-    if not bloky:
-        print(f"{datum}: zadny cesky hrac nenastoupil (nebo se nehralo). E-mail se neposila.")
+    stav, bloky = sestav_prehled(datum)
+
+    if stav == "hraje":
+        print(f"{datum}: nektere zapasy se jeste hraji, zkusi se to pozdeji.")
         return
 
-    d = datetime.strptime(datum, "%Y-%m-%d")
-    nadpis = f"Čeští hráči v NHL, {d.day}. {d.month}. {d.year}"
-    text = nadpis + "\n\n" + "\n\n".join(bloky) + "\n"
-    if jen_vypsat:
-        print(text)
+    if stav == "nic":
+        print(f"{datum}: nehralo se.")
+    elif not bloky:
+        print(f"{datum}: zadny cesky hrac nenastoupil. E-mail se neposila.")
     else:
-        posli_email(nadpis, text)
-        print("E-mail odeslan.")
+        d = datetime.strptime(datum, "%Y-%m-%d")
+        nadpis = f"Čeští hráči v NHL, {d.day}. {d.month}. {d.year}"
+        text = nadpis + "\n\n" + "\n\n".join(bloky) + "\n"
+        if jen_vypsat:
+            print(text)
+        else:
+            posli_email(nadpis, text)
+            print("E-mail odeslan.")
+
+    if ukladat:
+        zapis_stav(datum)
 
 
 if __name__ == "__main__":
     main()
-
