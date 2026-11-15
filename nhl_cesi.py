@@ -2,6 +2,7 @@
 import html
 import json
 import os
+import re
 import smtplib
 import sys
 import urllib.request
@@ -78,12 +79,40 @@ def je_cech(pid):
     return _zeme[k] == "CZE"
 
 
+VIDEO = re.compile(r"\[\[v:(https?://[^\]\s]+)\]\]")
+
+
+def najdi_odkaz(gol):
+    for k, v in gol.items():
+        kl = k.lower()
+        if "clip" in kl and "url" in kl and not k.endswith("Fr") and isinstance(v, str) and v.startswith("http"):
+            return v
+    return None
+
+
+def nacti_videa(game_id):
+    """{playerId: [odkazy na videa golu]} podle dat zapasu (jen kdyz je NHL uvadi)."""
+    videa, celkem = {}, 0
+    try:
+        data = get(f"/gamecenter/{game_id}/landing")
+        for obdobi in data.get("summary", {}).get("scoring", []):
+            for gol in obdobi.get("goals", []):
+                celkem += 1
+                odk = najdi_odkaz(gol)
+                if odk:
+                    videa.setdefault(gol.get("playerId"), []).append(odk)
+    except Exception as e:
+        print(f"Videa k zapasu {game_id} se nepodarilo nacist: {e}", file=sys.stderr)
+    print(f"Zapas {game_id}: odkazy na videa {sum(len(v) for v in videa.values())} z {celkem} golu")
+    return videa
+
+
 def jmeno(p):
     n = p.get("name", {})
     return n.get("default", "?") if isinstance(n, dict) else str(n)
 
 
-def radek_hrace(p, tym):
+def radek_hrace(p, tym, videa=None):
     toi = p.get("toi") or "00:00"
     if toi in ("00:00", "0:00"):
         return None
@@ -95,6 +124,7 @@ def radek_hrace(p, tym):
     body += "🍎" * a
     if not body:
         body = "bez bodu"
+    body += "".join(f" [[v:{u}]]" for u in (videa or []))
     return (
         f"{jmeno(p)} ({tym}): {body}, {pm:+d}, "
         f"{toi} na ledě, {p.get('sog', 0)} střel na bránu"
@@ -131,12 +161,15 @@ def sestav_prehled(datum):
         box = get(f"/gamecenter/{g['id']}/boxscore")
         away, home = box["awayTeam"], box["homeTeam"]
         radky = []
+        videa = None
         for strana, tym in (("awayTeam", away["abbrev"]), ("homeTeam", home["abbrev"])):
             soupiska(tym)
             st = box.get("playerByGameStats", {}).get(strana, {})
             for p in st.get("forwards", []) + st.get("defense", []):
                 if je_cech(p.get("playerId")):
-                    r = radek_hrace(p, tym)
+                    if p.get("goals", 0) and videa is None:
+                        videa = nacti_videa(g["id"])
+                    r = radek_hrace(p, tym, (videa or {}).get(p.get("playerId")))
                     if r:
                         radky.append(r)
             for p in st.get("goalies", []):
@@ -196,6 +229,7 @@ ul{margin:0;padding-left:18px}li{margin:4px 0}
 .t{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
 th,td{padding:5px 6px;border-bottom:1px solid var(--b);text-align:right;white-space:nowrap}
 th:first-child,td:first-child{text-align:left}
+a.v{color:inherit;text-decoration:none;padding:0 4px}
 </style></head><body>
 <h1>🇨🇿 Češi v NHL</h1>
 <p class="m">Aktualizováno @@CAS@@</p>
@@ -222,7 +256,9 @@ def den_html(datum, stav, bloky, nova=False):
     for b in bloky:
         radky = b.split("\n")
         out += "<section><h3>" + html.escape(radky[0]) + "</h3><ul>"
-        out += "".join("<li>" + html.escape(r) + "</li>" for r in radky[1:])
+        out += "".join(
+            "<li>" + VIDEO.sub(r'<a class="v" href="\1" target="_blank" rel="noopener">▶</a>', html.escape(r)) + "</li>"
+            for r in radky[1:])
         out += "</ul></section>"
     return out + "</div>"
 
@@ -398,6 +434,7 @@ def hlavni():
     else:
         nadpis = f"Čeští hráči v NHL, {cz_datum(datum)}"
         text = nadpis + "\n\n" + "\n\n".join(bloky) + "\n"
+        text = VIDEO.sub(lambda m: "▶ " + m.group(1), text)
         if jen_vypsat:
             print(text)
         else:
