@@ -19,22 +19,63 @@ def get(path):
         return json.load(r)
 
 
+CACHE = "cesi_cache.json"
+_zeme = {}
+_stav = {"zmena": False}
 _rosters = {}
 
 
-def cesi_v_tymu(tym):
+def nacti_cache():
+    try:
+        with open(CACHE, encoding="utf-8") as f:
+            _zeme.update(json.load(f))
+    except Exception:
+        pass
+
+
+def uloz_cache():
+    if _stav["zmena"]:
+        with open(CACHE, "w", encoding="utf-8") as f:
+            json.dump(_zeme, f, sort_keys=True)
+
+
+def zapamatuj(pid, zeme):
+    if _zeme.get(str(pid)) != zeme:
+        _zeme[str(pid)] = zeme
+        _stav["zmena"] = True
+
+
+def soupiska(tym):
+    """Aktualni soupiska tymu {id: zeme}; zaroven si pamatuje zeme puvodu hracu."""
     if tym not in _rosters:
-        ids = set()
+        ids = {}
         try:
             data = get(f"/roster/{tym}/current")
             for skupina in ("forwards", "defensemen", "goalies"):
                 for p in data.get(skupina, []):
-                    if p.get("birthCountry") == "CZE":
-                        ids.add(p["id"])
+                    zeme = p.get("birthCountry")
+                    ids[p["id"]] = zeme
+                    if zeme:
+                        zapamatuj(p["id"], zeme)
         except Exception as e:
             print(f"Soupisku {tym} se nepodarilo nacist: {e}", file=sys.stderr)
         _rosters[tym] = ids
     return _rosters[tym]
+
+
+def je_cech(pid):
+    """Cech podle zeme puvodu. Hrace mimo soupisky (poslane na farmu) dohleda jednou a zapamatuje."""
+    if pid is None:
+        return False
+    k = str(pid)
+    if k not in _zeme:
+        try:
+            zeme = get(f"/player/{pid}/landing").get("birthCountry") or "?"
+            zapamatuj(pid, zeme)
+        except Exception as e:
+            print(f"Hrace {pid} se nepodarilo zjistit: {e}", file=sys.stderr)
+            return False
+    return _zeme[k] == "CZE"
 
 
 def jmeno(p):
@@ -91,15 +132,15 @@ def sestav_prehled(datum):
         away, home = box["awayTeam"], box["homeTeam"]
         radky = []
         for strana, tym in (("awayTeam", away["abbrev"]), ("homeTeam", home["abbrev"])):
-            cesi = cesi_v_tymu(tym)
+            soupiska(tym)
             st = box.get("playerByGameStats", {}).get(strana, {})
             for p in st.get("forwards", []) + st.get("defense", []):
-                if p.get("playerId") in cesi:
+                if je_cech(p.get("playerId")):
                     r = radek_hrace(p, tym)
                     if r:
                         radky.append(r)
             for p in st.get("goalies", []):
-                if p.get("playerId") in cesi:
+                if je_cech(p.get("playerId")):
                     r = radek_brankare(p, tym)
                     if r:
                         radky.append(r)
@@ -212,10 +253,10 @@ def sluc_brankare(zaznamy):
 
 def sezonni_html():
     tymy = [t["teamAbbrev"]["default"] for t in get("/standings/now")["standings"]]
-    hraci, brankari_zaznamy, cesi_tym = {}, {}, {}
+    hraci, brankari_zaznamy, soucasny, kde = {}, {}, {}, {}
     for tym in tymy:
-        for pid in cesi_v_tymu(tym):
-            cesi_tym[pid] = tym
+        for pid in soupiska(tym):
+            soucasny[pid] = tym
         try:
             st = get(f"/club-stats/{tym}/now")
         except Exception as e:
@@ -225,6 +266,7 @@ def sezonni_html():
             pid = p.get("playerId")
             if pid is None:
                 continue
+            kde.setdefault(pid, []).append(tym)
             h = hraci.setdefault(pid, {"p": p, "z": 0, "g": 0, "a": 0, "b": 0, "pm": 0})
             h["z"] += p.get("gamesPlayed", 0)
             h["g"] += p.get("goals", 0)
@@ -232,14 +274,21 @@ def sezonni_html():
             h["b"] += p.get("points", 0)
             h["pm"] += p.get("plusMinus", 0)
         for p in st.get("goalies", []):
-            if p.get("playerId") is not None:
-                brankari_zaznamy.setdefault(p["playerId"], []).append(p)
+            pid = p.get("playerId")
+            if pid is not None:
+                kde.setdefault(pid, []).append(tym)
+                brankari_zaznamy.setdefault(pid, []).append(p)
+    cesi = {pid for pid in list(hraci) + list(brankari_zaznamy) if je_cech(pid)}
+
+    def tym_hrace(pid):
+        return soucasny.get(pid) or kde[pid][-1]
+
     brankari_vsichni = {pid: sluc_brankare(z) for pid, z in brankari_zaznamy.items()}
     body_vsech = [h["b"] for h in hraci.values()]
     limit = max(1, round(max((h["z"] for h in hraci.values()), default=0) * 0.25))
     sv_vsech = [g["sv"] for g in brankari_vsichni.values() if g["z"] >= limit and g["sv"] is not None]
-    bruslari = [(cesi_tym[pid], h) for pid, h in hraci.items() if pid in cesi_tym]
-    brankari = [(cesi_tym[pid], g) for pid, g in brankari_vsichni.items() if pid in cesi_tym]
+    bruslari = [(tym_hrace(pid), h) for pid, h in hraci.items() if pid in cesi]
+    brankari = [(tym_hrace(pid), g) for pid, g in brankari_vsichni.items() if pid in cesi]
     bruslari.sort(key=lambda x: (-x[1]["b"], -x[1]["g"]))
     brankari.sort(key=lambda x: -x[1]["z"])
     e = html.escape
@@ -321,7 +370,7 @@ def posli_email(predmet, text):
         s.send_message(msg)
 
 
-def main():
+def hlavni():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     jen_vypsat = "--print" in sys.argv
     rucne = bool(args)
@@ -363,6 +412,14 @@ def main():
 
     if ukladat:
         zapis_stav(datum)
+
+
+def main():
+    nacti_cache()
+    try:
+        hlavni()
+    finally:
+        uloz_cache()
 
 
 if __name__ == "__main__":
