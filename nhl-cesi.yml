@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: nhl-cesi
+  cancel-in-progress: false
+
 jobs:
   prehled:
     runs-on: ubuntu-latest
@@ -32,4 +36,4 @@ jobs:
           git config user.name "nhl-bot"
           git config user.email "nhl-bot@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || (git commit -m "stav" && git push)
+          git diff --cached --quiet || (git commit -m "stav" && git pull --rebase origin main && git push)
