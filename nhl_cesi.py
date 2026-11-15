@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 API = "https://api-web.nhle.com/v1"
 STAV = "odeslano.txt"
+DNY = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"]
+BARVY = [215, 140, 30, 270, 355, 180, 50]
 
 
 def get(path):
@@ -116,6 +118,8 @@ STRANKA = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="NHL Češi">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="apple-touch-icon.png">
 <title>Češi v NHL</title>
 <style>
 :root{--bg:#fff;--fg:#1a1a1a;--m:#666;--c:#f3f4f6;--b:#d9dce1}
@@ -123,6 +127,11 @@ STRANKA = """<!doctype html>
 body{margin:0;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(16px,env(safe-area-inset-bottom));background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,sans-serif}
 h1{font-size:21px;margin:0 0 4px}h2{font-size:17px;margin:22px 0 8px}h3{font-size:15px;margin:0 0 6px}
 section{background:var(--c);border-radius:10px;padding:10px 12px;margin:0 0 10px}
+.den section{background:hsl(var(--h),70%,93%);border-left:5px solid hsl(var(--h),65%,48%)}
+.den h2{color:hsl(var(--h),60%,30%)}
+.nova section{border-left-width:9px}
+.znacka{font-size:12px;font-weight:600;color:hsl(var(--h),60%,30%);background:hsl(var(--h),70%,88%);border-radius:8px;padding:2px 8px;margin-left:6px;vertical-align:2px}
+@media(prefers-color-scheme:dark){.den section{background:hsl(var(--h),30%,17%)}.den h2{color:hsl(var(--h),70%,75%)}.znacka{color:hsl(var(--h),70%,80%);background:hsl(var(--h),35%,26%)}}
 ul{margin:0;padding-left:18px}li{margin:4px 0}
 .m{color:var(--m);font-size:13px}
 .t{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
@@ -141,8 +150,12 @@ def cz_datum(datum):
     return f"{d.day}. {d.month}. {d.year}"
 
 
-def den_html(datum, stav, bloky):
-    out = f"<h2>{cz_datum(datum)}</h2>"
+def den_html(datum, stav, bloky, nova=False):
+    d = datetime.strptime(datum, "%Y-%m-%d")
+    nazev = f"{DNY[d.weekday()]} {d.day}. {d.month}. {d.year}"
+    znacka = '<span class="znacka">poslední</span>' if nova else ""
+    out = f'<div class="den{" nova" if nova else ""}" style="--h:{BARVY[d.weekday()]}">'
+    out += f"<h2>{html.escape(nazev)}{znacka}</h2>"
     if stav == "nic":
         out += '<p class="m">Nehrálo se.</p>'
     elif stav == "hraje":
@@ -154,7 +167,7 @@ def den_html(datum, stav, bloky):
         out += "<section><h3>" + html.escape(radky[0]) + "</h3><ul>"
         out += "".join("<li>" + html.escape(r) + "</li>" for r in radky[1:])
         out += "</ul></section>"
-    return out
+    return out + "</div>"
 
 
 def cele_jmeno(p):
@@ -165,36 +178,62 @@ def cele_jmeno(p):
     return " ".join(c for c in casti if c) or "?"
 
 
+def poradi(vsechny, hodnota):
+    return 1 + sum(1 for x in vsechny if x > hodnota)
+
+
 def sezonni_html():
     tymy = [t["teamAbbrev"]["default"] for t in get("/standings/now")["standings"]]
+    body_vsech, brankari_vsech = [], []
     bruslari, brankari = [], []
+    max_zapasu = 0
     for tym in tymy:
         cesi = cesi_v_tymu(tym)
-        if not cesi:
+        try:
+            st = get(f"/club-stats/{tym}/now")
+        except Exception as e:
+            print(f"Statistiky {tym} se nepodarilo nacist: {e}", file=sys.stderr)
             continue
-        st = get(f"/club-stats/{tym}/now")
-        bruslari += [(tym, p) for p in st.get("skaters", []) if p.get("playerId") in cesi]
-        brankari += [(tym, p) for p in st.get("goalies", []) if p.get("playerId") in cesi]
+        for p in st.get("skaters", []):
+            body_vsech.append(p.get("points", 0))
+            max_zapasu = max(max_zapasu, p.get("gamesPlayed", 0))
+            if p.get("playerId") in cesi:
+                bruslari.append((tym, p))
+        for p in st.get("goalies", []):
+            brankari_vsech.append(p)
+            if p.get("playerId") in cesi:
+                brankari.append((tym, p))
+    limit = max(1, round(max_zapasu * 0.25))
+    sv_vsech = [g.get("savePercentage") for g in brankari_vsech
+                if g.get("gamesPlayed", 0) >= limit and g.get("savePercentage") is not None]
     bruslari.sort(key=lambda x: (-x[1].get("points", 0), -x[1].get("goals", 0)))
     brankari.sort(key=lambda x: -x[1].get("gamesPlayed", 0))
     e = html.escape
     out = '<h2>Sezóna: hráči</h2><div class="t"><table>'
     out += "<tr><th>Hráč</th><th>Tým</th><th>Z</th><th>G</th><th>A</th><th>B</th><th>+/-</th></tr>"
     for tym, p in bruslari:
+        b = p.get("points", 0)
         out += (f"<tr><td>{e(cele_jmeno(p))}</td><td>{e(tym)}</td><td>{p.get('gamesPlayed', 0)}</td>"
                 f"<td>{p.get('goals', 0)}</td><td>{p.get('assists', 0)}</td>"
-                f"<td><b>{p.get('points', 0)}</b></td><td>{p.get('plusMinus', 0):+d}</td></tr>")
+                f"<td><b>{b}</b> <span class=\"m\">({poradi(body_vsech, b)}.)</span></td>"
+                f"<td>{p.get('plusMinus', 0):+d}</td></tr>")
     out += "</table></div>"
     out += '<h2>Sezóna: brankáři</h2><div class="t"><table>'
     out += "<tr><th>Brankář</th><th>Tým</th><th>Z</th><th>Úspěšnost</th><th>Gól/zápas</th></tr>"
     for tym, p in brankari:
         sv = p.get("savePercentage")
-        sv = "-" if sv is None else f"{sv * 100 if sv <= 1 else sv:.1f} %".replace(".", ",")
+        text = "-"
+        if sv is not None:
+            text = f"{sv * 100 if sv <= 1 else sv:.1f} %".replace(".", ",")
+            if p.get("gamesPlayed", 0) >= limit:
+                text += f' <span class="m">({poradi(sv_vsech, sv)}.)</span>'
         gaa = p.get("goalsAgainstAverage")
         gaa = "-" if gaa is None else f"{gaa:.2f}".replace(".", ",")
         out += (f"<tr><td>{e(cele_jmeno(p))}</td><td>{e(tym)}</td><td>{p.get('gamesPlayed', 0)}</td>"
-                f"<td>{sv}</td><td>{gaa}</td></tr>")
+                f"<td>{text}</td><td>{gaa}</td></tr>")
     out += "</table></div>"
+    out += ('<p class="m">V závorce je pořadí v celé NHL: hráči podle bodů, brankáři podle úspěšnosti '
+            f'(započítáni brankáři od {limit} zápasů). Stejný výsledek znamená stejné pořadí.</p>')
     return out
 
 
@@ -210,7 +249,7 @@ def zapis_web(datum, stav, bloky):
     except Exception as e:
         print(f"Sezonni tabulku se nepodarilo nacist: {e}", file=sys.stderr)
         sezona = '<p class="m">Sezónní tabulku se nepodařilo načíst.</p>'
-    telo = den_html(datum, stav, bloky) + den_html(pred, st2, bl2) + sezona
+    telo = den_html(datum, stav, bloky, True) + den_html(pred, st2, bl2) + sezona
     cas = datetime.now(ZoneInfo("Europe/Prague")).strftime("%-d. %-m. %Y %H:%M")
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
