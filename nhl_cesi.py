@@ -11,8 +11,6 @@ from zoneinfo import ZoneInfo
 
 API = "https://api-web.nhle.com/v1"
 STAV = "odeslano.txt"
-DNY = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"]
-BARVY = [215, 140, 30, 270, 355, 180, 50]
 
 
 def get(path):
@@ -113,25 +111,45 @@ def sestav_prehled(datum):
 
 # ---------- webova stranka ----------
 
+MANIFEST = {
+    "name": "Češi v NHL", "short_name": "NHL Češi", "lang": "cs",
+    "start_url": "./", "scope": "./", "display": "standalone",
+    "background_color": "#f5f6f8", "theme_color": "#f5f6f8",
+    "icons": [
+        {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+SERVICE_WORKER = """const C='nhl-cesi-v1';
+self.addEventListener('install',e=>{self.skipWaiting();});
+self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
+self.addEventListener('fetch',e=>{
+  if(e.request.method!=='GET')return;
+  e.respondWith(fetch(e.request).then(r=>{const c=r.clone();caches.open(C).then(x=>x.put(e.request,c));return r;}).catch(()=>caches.match(e.request)));
+});
+"""
+
 STRANKA = """<!doctype html>
 <html lang="cs"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="NHL Češi">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f5f6f8">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="apple-touch-icon.png">
 <title>Češi v NHL</title>
 <style>
-:root{--bg:#fff;--fg:#1a1a1a;--m:#666;--c:#f3f4f6;--b:#d9dce1}
-@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--m:#9aa3ad;--c:#1c1f24;--b:#333}}
+:root{--bg:#f5f6f8;--fg:#1a1a1a;--m:#666;--nova:#fff;--stara:#dcdfe4;--b:#d9dce1}
+@media(prefers-color-scheme:dark){:root{--bg:#111;--fg:#eee;--m:#9aa3ad;--nova:#2a3039;--stara:#181b20;--b:#333}}
 body{margin:0;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:max(16px,env(safe-area-inset-bottom));background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,sans-serif}
 h1{font-size:21px;margin:0 0 4px}h2{font-size:17px;margin:22px 0 8px}h3{font-size:15px;margin:0 0 6px}
-section{background:var(--c);border-radius:10px;padding:10px 12px;margin:0 0 10px}
-.den section{background:hsl(var(--h),70%,93%);border-left:5px solid hsl(var(--h),65%,48%)}
-.den h2{color:hsl(var(--h),60%,30%)}
-.nova section{border-left-width:9px}
-.znacka{font-size:12px;font-weight:600;color:hsl(var(--h),60%,30%);background:hsl(var(--h),70%,88%);border-radius:8px;padding:2px 8px;margin-left:6px;vertical-align:2px}
-@media(prefers-color-scheme:dark){.den section{background:hsl(var(--h),30%,17%)}.den h2{color:hsl(var(--h),70%,75%)}.znacka{color:hsl(var(--h),70%,80%);background:hsl(var(--h),35%,26%)}}
+section{border-radius:10px;padding:10px 12px;margin:0 0 10px}
+.nova section{background:var(--nova);border:1px solid var(--b);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.stara section{background:var(--stara);border:1px solid transparent}
 ul{margin:0;padding-left:18px}li{margin:4px 0}
 .m{color:var(--m);font-size:13px}
 .t{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
@@ -141,6 +159,7 @@ th:first-child,td:first-child{text-align:left}
 <h1>🇨🇿 Češi v NHL</h1>
 <p class="m">Aktualizováno @@CAS@@</p>
 @@TELO@@
+<script>if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js");</script>
 </body></html>
 """
 
@@ -151,11 +170,8 @@ def cz_datum(datum):
 
 
 def den_html(datum, stav, bloky, nova=False):
-    d = datetime.strptime(datum, "%Y-%m-%d")
-    nazev = f"{DNY[d.weekday()]} {d.day}. {d.month}. {d.year}"
-    znacka = '<span class="znacka">poslední</span>' if nova else ""
-    out = f'<div class="den{" nova" if nova else ""}" style="--h:{BARVY[d.weekday()]}">'
-    out += f"<h2>{html.escape(nazev)}{znacka}</h2>"
+    out = f'<div class="den {"nova" if nova else "stara"}">'
+    out += f"<h2>{html.escape(cz_datum(datum))}</h2>"
     if stav == "nic":
         out += '<p class="m">Nehrálo se.</p>'
     elif stav == "hraje":
@@ -182,58 +198,73 @@ def poradi(vsechny, hodnota):
     return 1 + sum(1 for x in vsechny if x > hodnota)
 
 
+def sluc_brankare(zaznamy):
+    hlavni = max(zaznamy, key=lambda g: g.get("gamesPlayed", 0))
+    sv = hlavni.get("savePercentage")
+    if len(zaznamy) > 1:
+        sa = sum(g.get("shotsAgainst") or 0 for g in zaznamy)
+        ga = sum(g.get("goalsAgainst") or 0 for g in zaznamy)
+        if sa:
+            sv = 1 - ga / sa
+    return {"p": hlavni, "z": sum(g.get("gamesPlayed", 0) for g in zaznamy),
+            "sv": sv, "gaa": hlavni.get("goalsAgainstAverage")}
+
+
 def sezonni_html():
     tymy = [t["teamAbbrev"]["default"] for t in get("/standings/now")["standings"]]
-    body_vsech, brankari_vsech = [], []
-    bruslari, brankari = [], []
-    max_zapasu = 0
+    hraci, brankari_zaznamy, cesi_tym = {}, {}, {}
     for tym in tymy:
-        cesi = cesi_v_tymu(tym)
+        for pid in cesi_v_tymu(tym):
+            cesi_tym[pid] = tym
         try:
             st = get(f"/club-stats/{tym}/now")
         except Exception as e:
             print(f"Statistiky {tym} se nepodarilo nacist: {e}", file=sys.stderr)
             continue
         for p in st.get("skaters", []):
-            body_vsech.append(p.get("points", 0))
-            max_zapasu = max(max_zapasu, p.get("gamesPlayed", 0))
-            if p.get("playerId") in cesi:
-                bruslari.append((tym, p))
+            pid = p.get("playerId")
+            if pid is None:
+                continue
+            h = hraci.setdefault(pid, {"p": p, "z": 0, "g": 0, "a": 0, "b": 0, "pm": 0})
+            h["z"] += p.get("gamesPlayed", 0)
+            h["g"] += p.get("goals", 0)
+            h["a"] += p.get("assists", 0)
+            h["b"] += p.get("points", 0)
+            h["pm"] += p.get("plusMinus", 0)
         for p in st.get("goalies", []):
-            brankari_vsech.append(p)
-            if p.get("playerId") in cesi:
-                brankari.append((tym, p))
-    limit = max(1, round(max_zapasu * 0.25))
-    sv_vsech = [g.get("savePercentage") for g in brankari_vsech
-                if g.get("gamesPlayed", 0) >= limit and g.get("savePercentage") is not None]
-    bruslari.sort(key=lambda x: (-x[1].get("points", 0), -x[1].get("goals", 0)))
-    brankari.sort(key=lambda x: -x[1].get("gamesPlayed", 0))
+            if p.get("playerId") is not None:
+                brankari_zaznamy.setdefault(p["playerId"], []).append(p)
+    brankari_vsichni = {pid: sluc_brankare(z) for pid, z in brankari_zaznamy.items()}
+    body_vsech = [h["b"] for h in hraci.values()]
+    limit = max(1, round(max((h["z"] for h in hraci.values()), default=0) * 0.25))
+    sv_vsech = [g["sv"] for g in brankari_vsichni.values() if g["z"] >= limit and g["sv"] is not None]
+    bruslari = [(cesi_tym[pid], h) for pid, h in hraci.items() if pid in cesi_tym]
+    brankari = [(cesi_tym[pid], g) for pid, g in brankari_vsichni.items() if pid in cesi_tym]
+    bruslari.sort(key=lambda x: (-x[1]["b"], -x[1]["g"]))
+    brankari.sort(key=lambda x: -x[1]["z"])
     e = html.escape
     out = '<h2>Sezóna: hráči</h2><div class="t"><table>'
     out += "<tr><th>Hráč</th><th>Tým</th><th>Z</th><th>G</th><th>A</th><th>B</th><th>+/-</th></tr>"
-    for tym, p in bruslari:
-        b = p.get("points", 0)
-        out += (f"<tr><td>{e(cele_jmeno(p))}</td><td>{e(tym)}</td><td>{p.get('gamesPlayed', 0)}</td>"
-                f"<td>{p.get('goals', 0)}</td><td>{p.get('assists', 0)}</td>"
-                f"<td><b>{b}</b> <span class=\"m\">({poradi(body_vsech, b)}.)</span></td>"
-                f"<td>{p.get('plusMinus', 0):+d}</td></tr>")
+    for tym, h in bruslari:
+        r = poradi(body_vsech, h["b"])
+        out += (f"<tr><td>{e(cele_jmeno(h['p']))} <span class=\"m\">({r}.)</span></td><td>{e(tym)}</td>"
+                f"<td>{h['z']}</td><td>{h['g']}</td><td>{h['a']}</td>"
+                f"<td><b>{h['b']}</b></td><td>{h['pm']:+d}</td></tr>")
     out += "</table></div>"
     out += '<h2>Sezóna: brankáři</h2><div class="t"><table>'
     out += "<tr><th>Brankář</th><th>Tým</th><th>Z</th><th>Úspěšnost</th><th>Gól/zápas</th></tr>"
-    for tym, p in brankari:
-        sv = p.get("savePercentage")
-        text = "-"
-        if sv is not None:
-            text = f"{sv * 100 if sv <= 1 else sv:.1f} %".replace(".", ",")
-            if p.get("gamesPlayed", 0) >= limit:
-                text += f' <span class="m">({poradi(sv_vsech, sv)}.)</span>'
-        gaa = p.get("goalsAgainstAverage")
-        gaa = "-" if gaa is None else f"{gaa:.2f}".replace(".", ",")
-        out += (f"<tr><td>{e(cele_jmeno(p))}</td><td>{e(tym)}</td><td>{p.get('gamesPlayed', 0)}</td>"
-                f"<td>{text}</td><td>{gaa}</td></tr>")
+    for tym, g in brankari:
+        jm = e(cele_jmeno(g["p"]))
+        if g["sv"] is not None and g["z"] >= limit:
+            jm += f' <span class="m">({poradi(sv_vsech, g["sv"])}.)</span>'
+        sv = g["sv"]
+        sv_text = "-" if sv is None else f"{sv * 100 if sv <= 1 else sv:.1f} %".replace(".", ",")
+        gaa = "-" if g["gaa"] is None else f"{g['gaa']:.2f}".replace(".", ",")
+        out += (f"<tr><td>{jm}</td><td>{e(tym)}</td><td>{g['z']}</td>"
+                f"<td>{sv_text}</td><td>{gaa}</td></tr>")
     out += "</table></div>"
-    out += ('<p class="m">V závorce je pořadí v celé NHL: hráči podle bodů, brankáři podle úspěšnosti '
-            f'(započítáni brankáři od {limit} zápasů). Stejný výsledek znamená stejné pořadí.</p>')
+    out += ('<p class="m">V závorce za jménem je pořadí v celé NHL: hráči podle bodů (za všechny týmy dohromady), '
+            f'brankáři podle úspěšnosti, a to jen od {limit} odehraných zápasů. Stejný výsledek znamená stejné pořadí.</p>')
     return out
 
 
@@ -254,6 +285,10 @@ def zapis_web(datum, stav, bloky):
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
         f.write(STRANKA.replace("@@CAS@@", cas).replace("@@TELO@@", telo))
+    with open("docs/manifest.webmanifest", "w", encoding="utf-8") as f:
+        json.dump(MANIFEST, f, ensure_ascii=False, indent=1)
+    with open("docs/sw.js", "w", encoding="utf-8") as f:
+        f.write(SERVICE_WORKER)
     print("Web ulozen: docs/index.html")
 
 
