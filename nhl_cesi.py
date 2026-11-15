@@ -230,11 +230,22 @@ ul{margin:0;padding-left:18px}li{margin:4px 0}
 th,td{padding:5px 6px;border-bottom:1px solid var(--b);text-align:right;white-space:nowrap}
 th:first-child,td:first-child{text-align:left}
 a.v{color:inherit;text-decoration:none;padding:0 4px}
+.hl{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:22px 0 8px}
+.hl h2{margin:0}
+.kop{font:inherit;font-size:13px;padding:5px 11px;border-radius:8px;border:1px solid var(--b);background:var(--nova);color:var(--fg);cursor:pointer;white-space:nowrap}
 </style></head><body>
 <h1>🇨🇿 Češi v NHL</h1>
 <p class="m">Aktualizováno @@CAS@@</p>
 @@TELO@@
-<script>if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js");</script>
+<script>if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js");
+document.addEventListener("click",function(ev){
+  var b=ev.target.closest(".kop");if(!b)return;
+  var t=b.getAttribute("data-t"),o=b.textContent;
+  function ok(){b.textContent="✓ Zkopírováno";setTimeout(function(){b.textContent=o;},1600);}
+  function nouzove(){var a=document.createElement("textarea");a.value=t;a.style.position="fixed";a.style.opacity="0";document.body.appendChild(a);a.focus();a.select();try{document.execCommand("copy");ok();}catch(e){b.textContent="Nepodařilo se";}document.body.removeChild(a);}
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(ok,nouzove);}else{nouzove();}
+});
+</script>
 </body></html>
 """
 
@@ -244,9 +255,29 @@ def cz_datum(datum):
     return f"{d.day}. {d.month}. {d.year}"
 
 
+def tlacitko(text):
+    if not text:
+        return ""
+    t = html.escape(text).replace("\n", "&#10;")
+    return f'<button class="kop" type="button" data-t="{t}">📋 Kopírovat</button>'
+
+
+def den_text(datum, stav, bloky):
+    if stav == "hraje":
+        return ""
+    if stav == "nic":
+        telo = "Nehrálo se."
+    elif not bloky:
+        telo = "Žádný Čech nenastoupil."
+    else:
+        telo = "\n\n".join(bloky)
+    text = f"Čeští hráči v NHL, {cz_datum(datum)}\n\n" + telo
+    return VIDEO.sub(lambda m: "▶ " + m.group(1), text)
+
+
 def den_html(datum, stav, bloky, nova=False):
     out = f'<div class="den {"nova" if nova else "stara"}">'
-    out += f"<h2>{html.escape(cz_datum(datum))}</h2>"
+    out += f'<div class="hl"><h2>{html.escape(cz_datum(datum))}</h2>{tlacitko(den_text(datum, stav, bloky))}</div>'
     if stav == "nic":
         out += '<p class="m">Nehrálo se.</p>'
     elif stav == "hraje":
@@ -328,26 +359,40 @@ def sezonni_html():
     bruslari.sort(key=lambda x: (-x[1]["b"], -x[1]["g"]))
     brankari.sort(key=lambda x: -x[1]["z"])
     e = html.escape
-    out = '<h2>Sezóna: hráči</h2><div class="t"><table>'
-    out += "<tr><th>Hráč</th><th>Tým</th><th>Z</th><th>G</th><th>A</th><th>B</th><th>+/-</th></tr>"
+    radky_h, text_h = [], []
     for tym, h in bruslari:
         r = poradi(body_vsech, h["b"])
-        out += (f"<tr><td>{e(cele_jmeno(h['p']))} <span class=\"m\">({r}.)</span></td><td>{e(tym)}</td>"
-                f"<td>{h['z']}</td><td>{h['g']}</td><td>{h['a']}</td>"
-                f"<td><b>{h['b']}</b></td><td>{h['pm']:+d}</td></tr>")
-    out += "</table></div>"
-    out += '<h2>Sezóna: brankáři</h2><div class="t"><table>'
-    out += "<tr><th>Brankář</th><th>Tým</th><th>Z</th><th>Úspěšnost</th><th>Gól/zápas</th></tr>"
+        jm = cele_jmeno(h["p"])
+        radky_h.append(
+            f"<tr><td>{e(jm)} <span class=\"m\">({r}.)</span></td><td>{e(tym)}</td>"
+            f"<td>{h['z']}</td><td>{h['g']}</td><td>{h['a']}</td>"
+            f"<td><b>{h['b']}</b></td><td>{h['pm']:+d}</td></tr>")
+        text_h.append(f"{jm} ({tym}): {h['z']} z., {h['g']} G, {h['a']} A, {h['b']} B, {h['pm']:+d} (NHL: {r}.)")
+    radky_b, text_b = [], []
     for tym, g in brankari:
-        jm = e(cele_jmeno(g["p"]))
+        jm = cele_jmeno(g["p"])
+        poradi_txt = ""
         if g["sv"] is not None and g["z"] >= limit:
-            jm += f' <span class="m">({poradi(sv_vsech, g["sv"])}.)</span>'
+            poradi_txt = f"({poradi(sv_vsech, g['sv'])}.)"
         sv = g["sv"]
         sv_text = "-" if sv is None else f"{sv * 100 if sv <= 1 else sv:.1f} %".replace(".", ",")
         gaa = "-" if g["gaa"] is None else f"{g['gaa']:.2f}".replace(".", ",")
-        out += (f"<tr><td>{jm}</td><td>{e(tym)}</td><td>{g['z']}</td>"
-                f"<td>{sv_text}</td><td>{gaa}</td></tr>")
-    out += "</table></div>"
+        jm_html = e(jm) + (f' <span class="m">{poradi_txt}</span>' if poradi_txt else "")
+        radky_b.append(
+            f"<tr><td>{jm_html}</td><td>{e(tym)}</td><td>{g['z']}</td>"
+            f"<td>{sv_text}</td><td>{gaa}</td></tr>")
+        text_b.append(f"{jm} ({tym}): {g['z']} z., úspěšnost {sv_text}, {gaa} gólů/zápas"
+                      + (f" (NHL: {poradi_txt[1:-1]})" if poradi_txt else ""))
+    dnes = datetime.now(ZoneInfo("Europe/Prague"))
+    text = (f"Čeští hráči v NHL, sezóna (stav k {dnes.day}. {dnes.month}. {dnes.year})\n\nHráči\n"
+            + "\n".join(text_h) + "\n\nBrankáři\n" + "\n".join(text_b)
+            + "\n\nV závorce je pořadí v celé NHL.")
+    out = f'<div class="hl"><h2>Sezóna: hráči</h2>{tlacitko(text)}</div><div class="t"><table>'
+    out += "<tr><th>Hráč</th><th>Tým</th><th>Z</th><th>G</th><th>A</th><th>B</th><th>+/-</th></tr>"
+    out += "".join(radky_h) + "</table></div>"
+    out += '<h2>Sezóna: brankáři</h2><div class="t"><table>'
+    out += "<tr><th>Brankář</th><th>Tým</th><th>Z</th><th>Úspěšnost</th><th>Gól/zápas</th></tr>"
+    out += "".join(radky_b) + "</table></div>"
     out += ('<p class="m">V závorce za jménem je pořadí v celé NHL: hráči podle bodů (za všechny týmy dohromady), '
             f'brankáři podle úspěšnosti, a to jen od {limit} odehraných zápasů. Stejný výsledek znamená stejné pořadí.</p>')
     return out
