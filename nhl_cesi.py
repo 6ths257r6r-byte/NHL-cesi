@@ -599,9 +599,12 @@ def hlavni():
         posledni = (datum, stav, bloky)
         if not jen_vypsat:
             zapis_stav(datum)
-    if posledni and not jen_vypsat:
-        web_bez_padu(*posledni)
-
+    
+    if not jen_vypsat:
+        if posledni:
+            web_bez_padu(*posledni)
+        else:
+            obnov_stary_web()
 
 def main():
     nacti_cache()
