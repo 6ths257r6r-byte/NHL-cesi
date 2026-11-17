@@ -1,7 +1,8 @@
-const C='nhl-cesi-v1';
+const C='nhl-cesi-v2';
 self.addEventListener('install',e=>{self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(self.clients.claim());});
 self.addEventListener('fetch',e=>{
-  if(e.request.method!=='GET')return;
-  e.respondWith(fetch(e.request,{cache:'no-store'}).then(r=>{const c=r.clone();caches.open(C).then(x=>x.put(e.request,c));return r;}).catch(()=>caches.match(e.request)));
+  const r=e.request;
+  if(r.method!=='GET'||new URL(r.url).origin!==location.origin)return;
+  e.respondWith(fetch(r,{cache:'no-store'}).then(x=>{const c=x.clone();caches.open(C).then(y=>y.put(r,c));return x;}).catch(()=>caches.match(r).then(x=>x||Response.error())));
 });
