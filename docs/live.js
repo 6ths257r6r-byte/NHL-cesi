@@ -3,7 +3,7 @@
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   var PROXY = "nhl-proxy.nhjz99szk4.workers.dev"; 
-  function ok(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
+  function ok(r) { if (!r.ok) throw new Error("HTTP " + r.status + " " + r.url); return r.json(); }
   function j(u) {
     return fetch(u).then(ok).catch(function (e) {
       if (!PROXY || u.indexOf("https://api-web.nhle.com") !== 0) throw e;
