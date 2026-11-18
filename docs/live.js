@@ -2,7 +2,7 @@
   var API = "https://api-web.nhle.com/v1", D = null, SET = {}, cache = {}, zacatek = Date.now();
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
-  var PROXY = ""; // sem pripadne vloz adresu pruchoziho serveru (bez lomitka na konci)
+  var PROXY = "nhl-proxy.nhjz99szk4.workers.dev"; 
   function ok(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
   function j(u) {
     return fetch(u).then(ok).catch(function (e) {
